@@ -1,78 +1,123 @@
-// approve-for-me — LLM auto-approval for the DSH approval seam.
-// Dynamic Cordis HOST half. Paste this file's content as `code.host`
-// (or the Host code in the Cordis panel). The plugin's running state is the
-// mode switch: while it is running, every approval request that reaches the
-// answerer chain is judged by an LLM safety reviewer; destructive high-risk
-// commands fall through to the normal interactive answerer (the user prompt).
+// approve-for-me — dynamic Cordis HOST half.
+// Paste this file's content as `code.host` (or the Host code in the Cordis
+// panel). The dynamic variant works inside the existing `ask` approval policy
+// and only takes over while the session's current permission preset equals
+// PRESET_NAME. You must add that preset yourself (e.g. via a profile patch),
+// because a dynamic package cannot patch the host `permission` row.
+// Dangerous hard-rule matches and uncertain/timeout/error cases fall through
+// to the interactive answerer (the user prompt).
 
 const PROVIDER = "deepseek-official";
 const MODEL = "deepseek-v4-flash";
-const MAX_TOKENS = 512;
+const PRESET_NAME = "auto-approve";
+const MAX_TOKENS = 256;
 const SUMMARY_MAX_CHARS = 12000;
+const TEMPERATURE = 0;
 
-// Exact-pattern destructive-command list. A match skips the LLM and asks the
-// user directly. Keep this conservative: a false positive only means a human
-// is asked, never a silent auto-approval.
-const HIGH_RISK_PATTERNS = [
-  /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\b/i,          // rm -r, rm -rf, rm -fr, rm -R, rm -rfv …
-  /\brm\s+(?:-[a-zA-Z]+\s+)*\/\b/i,             // rm /, rm -rf /, rm -- / …
-  /\bdrop\s+table\b/i,                          // drop table
-  /\bdrop\s+database\b/i,                       // drop database
-  /\bdrop\s+schema\b/i,                         // drop schema
-  /\btruncate\s+(?:table\s+)?\w+/i,             // truncate table …
-  /\bdelete\s+from\s+\w+/i,                     // delete from …
-  /\bmkfs(?:\.\w+)?\b/i,                        // mkfs, mkfs.ext4 …
-  /\bdd\s+if=/i,                                // dd if=/dev/… of=/dev/…
-  /\bshred\s+(-\w|\/)/i,                        // shred -…, shred /…
-  /\bwipefs\b/i,                                // wipefs
-  /\bgit\s+push\s+(?:-f|--force)\b/i,           // git push -f / --force
-  /\bgit\s+reset\s+--hard\b/i,                  // git reset --hard
-  /\bchmod\s+-R\s+777\b/i,                      // chmod -R 777 …
-  /\bchown\s+-R\b/i,                            // chown -R …
-  /:\(\)\s*\{\s*:\|:&\s*\};:/i                  // fork bomb
-];
+const SYSTEM_PROMPT = [
+  "You are a safety reviewer for an AI coding assistant's privileged-action requests.",
+  "Decide whether the requested action is a reasonable, non-destructive step consistent with the user's stated intent in the conversation summary.",
+  "Reply with exactly one word on its own line: ALLOW or REJECT. No explanation.",
+  "When unsure, reply REJECT."
+].join("\n");
 
-function isHighRisk(text) {
-  if (typeof text !== "string" || text.length === 0) return false;
-  return HIGH_RISK_PATTERNS.some((pattern) => pattern.test(text));
+/** Fold the last permission/preset event from the session log. */
+function foldPreset(events) {
+  if (!Array.isArray(events)) return undefined;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event || event.type !== "permission/preset") continue;
+    const preset = event.data && event.data.preset;
+    return typeof preset === "string" ? preset : undefined;
+  }
+  return undefined;
 }
 
-function findToolCall(events, callId, toolName) {
-  let fallback;
+/** Parse tool-call arguments for the exact callId, newest first. */
+function extractArgs(events, callId) {
+  if (callId === undefined || !Array.isArray(events)) return undefined;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (!event || event.type !== "tool/call") continue;
-    const data = event.data;
-    if (!data) continue;
-    if (callId !== undefined && data.callId === callId) return data;
-    if (fallback === undefined && data.name === toolName) fallback = data;
-  }
-  return fallback;
-}
-
-function actionText(req) {
-  const session = req.agent && req.agent.session;
-  if (session && Array.isArray(session.events)) {
-    const call = findToolCall(session.events, req.callId, req.toolName);
-    if (call) {
-      const raw = call.arguments;
-      if (typeof raw === "string") {
-        try {
-          const args = JSON.parse(raw);
-          if (args && typeof args === "object") {
-            if (typeof args.command === "string" && args.command.length > 0) return args.command;
-            return JSON.stringify(args);
-          }
-        } catch (_) {
-          return raw;
-        }
-      } else if (raw && typeof raw === "object") {
-        if (typeof raw.command === "string" && raw.command.length > 0) return raw.command;
-        return JSON.stringify(raw);
-      }
+    if (event.data && event.data.callId !== callId) continue;
+    const raw = event.data && event.data.arguments;
+    if (typeof raw !== "string") return undefined;
+    try {
+      return JSON.parse(raw);
+    } catch (_) {
+      return { raw };
     }
   }
-  return typeof req.reason === "string" ? req.reason : "";
+  return undefined;
+}
+
+/** System/protected directories across Windows / macOS / Linux. */
+function isSystemPath(path) {
+  if (typeof path !== "string" || path.length === 0) return false;
+  const norm = path.replace(/\\/g, "/").toLowerCase();
+  if (/^[a-z]:\/(?:windows|program files|program files \(x86\)|programdata|boot|recovery|system volume information)(?:\/|$)/.test(norm)) return true;
+  if (norm.includes("/appdata/roaming/microsoft/windows/start menu/programs/startup")) return true;
+  if (/^\/(?:etc|usr|bin|sbin|lib|lib64|var|boot|opt|proc|sys|dev|root|system|library|private|applications)(?:\/|$)/.test(norm)) return true;
+  return false;
+}
+
+/** Destructive / dangerous commands across Windows / macOS / Linux. */
+function isDestructiveCommand(cmd) {
+  if (typeof cmd !== "string" || cmd.length === 0) return false;
+  const c = cmd.toLowerCase();
+  return (
+    /\brm\s+-[a-z]*[r][a-z]*\b/.test(c) ||
+    /\brm\s+(?:-[a-z]+\s+)*\/\b/.test(c) ||
+    /\bdel\s+\/[sfq]\b/.test(c) ||
+    /\brmdir\s+\/[sq]\b/.test(c) ||
+    /\bremove-item\b[^\n]*\b-recurse\b[^\n]*\b-force\b/.test(c) ||
+    /\bdrop\s+table\b/.test(c) ||
+    /\bdrop\s+database\b/.test(c) ||
+    /\bdrop\s+schema\b/.test(c) ||
+    /\btruncate\s+(?:table\s+)?\w+/.test(c) ||
+    /\bdelete\s+from\s+\w+/.test(c) ||
+    /\bformat\s+[a-z]:/.test(c) ||
+    /\bdiskpart\b/.test(c) ||
+    /\bmkfs(?:\.\w+)?\b/.test(c) ||
+    /\bdd\s+if=/.test(c) ||
+    /\bshred\b/.test(c) ||
+    /\bsrm\b/.test(c) ||
+    /\bwipefs?\b/.test(c) ||
+    /\b(?:shutdown|reboot|poweroff|halt)\b/.test(c) ||
+    /\bcrontab\s+-r\b/.test(c) ||
+    /\bgit\s+push\s+(?:-f|--force)\b/.test(c) ||
+    /\bgit\s+reset\s+--hard\b/.test(c) ||
+    /\bchmod\s+-R\s+777\b/.test(c) ||
+    /\bchown\s+-R\b/.test(c) ||
+    /:\(\)\s*\{\s*:\|:&\s*\};:/.test(c)
+  );
+}
+
+/** Hard-rule gate: system path or destructive command → never auto-approve. */
+function isDefinitelyDangerous(args) {
+  if (!args || typeof args !== "object") return false;
+  const filePath = typeof args.file_path === "string"
+    ? args.file_path
+    : typeof args.path === "string"
+      ? args.path
+      : undefined;
+  const command = typeof args.command === "string" ? args.command : undefined;
+  if (filePath !== undefined && isSystemPath(filePath)) return true;
+  if (command !== undefined && isDestructiveCommand(command)) return true;
+  return false;
+}
+
+/** Compact action text from parsed tool args plus the request reason. */
+function actionText(req, args) {
+  const parts = [];
+  if (args && typeof args === "object") {
+    if (typeof args.command === "string" && args.command.length > 0) parts.push("command: " + args.command);
+    if (typeof args.file_path === "string" && args.file_path.length > 0) parts.push("file_path: " + args.file_path);
+    else if (typeof args.path === "string" && args.path.length > 0) parts.push("path: " + args.path);
+    if (typeof args.content === "string") parts.push("content: " + args.content.slice(0, 1000));
+  }
+  if (typeof req.reason === "string" && req.reason.length > 0) parts.push("reason: " + req.reason);
+  return parts.join("\n");
 }
 
 function messageText(content) {
@@ -105,6 +150,7 @@ function toolCallLine(data) {
 }
 
 function buildSummary(events, maxChars) {
+  if (!Array.isArray(events)) return "";
   const picked = [];
   let budget = maxChars;
   for (let index = events.length - 1; index >= 0 && budget > 0; index -= 1) {
@@ -130,11 +176,6 @@ function buildSummary(events, maxChars) {
 
 async function judgeWithLlm(req, llm, action) {
   const summary = buildSummary(req.agent.session.events, SUMMARY_MAX_CHARS);
-  const system = [
-    "You are a safety reviewer for an AI coding assistant's privileged-action requests.",
-    "Decide whether the requested action is a reasonable, non-destructive step consistent with the user's stated intent in the conversation summary.",
-    "Reply with exactly one word on its own line: ALLOW or REJECT. No explanation."
-  ].join("\n");
   const lines = [
     "CONVERSATION SUMMARY:",
     summary.length > 0 ? summary : "(no prior conversation)",
@@ -142,8 +183,7 @@ async function judgeWithLlm(req, llm, action) {
     "REQUESTED ACTION:",
     "tool: " + req.toolName
   ];
-  if (typeof req.reason === "string" && req.reason.length > 0) lines.push("reason: " + req.reason);
-  if (typeof action === "string" && action.length > 0) lines.push("action: " + action);
+  if (typeof action === "string" && action.length > 0) lines.push(action);
   const messages = [{
     role: "user",
     content: [{ type: "text", text: lines.join("\n") }]
@@ -152,7 +192,8 @@ async function judgeWithLlm(req, llm, action) {
     provider: PROVIDER,
     model: MODEL,
     messages: messages,
-    system: system,
+    system: SYSTEM_PROMPT,
+    temperature: TEMPERATURE,
     maxTokens: MAX_TOKENS,
     reasoningEffort: "off",
     sessionId: req.agent.session.id,
@@ -177,16 +218,25 @@ async function judgeWithLlm(req, llm, action) {
 
 return {
   name: "approve-for-me",
-  inject: ["approval", "llm"],
+  inject: ["llm"],
   apply(ctx) {
     ctx.on("approval/request", async (req, next) => {
       try {
         if (!req || !req.agent || !req.agent.session) return next();
         if (req.signal && req.signal.aborted) return "cancelled";
-        const action = actionText(req);
-        if (isHighRisk(action) || isHighRisk(req.reason)) return next();
+
+        // Only take over while the session is in the auto-approve preset.
+        if (foldPreset(req.agent.session.events) !== PRESET_NAME) return next();
+
+        const args = extractArgs(req.agent.session.events, req.callId);
+
+        // Hard rules: definitely dangerous → human, no LLM call.
+        if (isDefinitelyDangerous(args)) return next();
+
         const llm = ctx.llm;
         if (!llm) return next();
+
+        const action = actionText(req, args);
         const outcome = await judgeWithLlm(req, llm, action);
         if (outcome === undefined) return next();
         return outcome;

@@ -1,9 +1,33 @@
 # dsh-approve-for-me bundle patch.
 # The package declares this file in package.json via dsh.bundle.patch, so
 # `dsh plugin --profile web add dsh-approve-for-me` (or a local path) adds
-# the package to dsh.profile.bundles automatically and this row activates on
-# the next boot. Users can override the config in their profile's
-# cordis.patch.yml by targeting the same row id.
+# the package to dsh.profile.bundles automatically and this layer applies on
+# the next boot.
+#
+# 1) Add the fourth permission preset, "auto-approve" (帮我批准). A patch
+#    replaces the targeted row's whole config, so the three stock presets are
+#    restated exactly as dsh-base defines them.
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+      auto-approve:
+        sandbox: workspace-write
+        approval: ask
+        name: '帮我批准'
+        description: '低危操作由 deepseek-v4-flash 判定后自动放行；高危或不确定的操作仍需人工授权。'
+
+# 2) Mount the plugin. The row id is what profile patches target for config
+#    overrides (e.g. enabled: false). The preset name above is what the plugin
+#    matches against the session's current permission preset.
 - insert:
     - id: approve-for-me
       name: 'dsh-approve-for-me'
@@ -11,6 +35,8 @@
         enabled: true
         provider: deepseek-official
         model: deepseek-v4-flash
-        maxTokens: 512
+        presetName: auto-approve
+        maxTokens: 256
         summaryMaxChars: 12000
-        timeoutMs: 60000
+        timeoutMs: 15000
+        temperature: 0
