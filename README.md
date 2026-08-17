@@ -128,6 +128,7 @@ directory (`~/.dsh/profiles/<name>/`), so `../../plugins/...` reaches
   - `maxTokens` (default `512`)
   - `summaryMaxChars` (default `12000`)
   - `timeoutMs` (default `60000`)
+  - `reasoningEffort` (default `off`; keep it `off` so the verdict is not consumed by reasoning tokens)
 
 ## Install (dynamic, per-run)
 

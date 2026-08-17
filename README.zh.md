@@ -114,6 +114,7 @@ git clone https://github.com/shifan3/dsh-approve-for-me.git ~/.dsh/plugins/appro
   - `maxTokens`（默认 `512`）
   - `summaryMaxChars`（默认 `12000`）
   - `timeoutMs`（默认 `60000`）
+  - `reasoningEffort`（默认 `off`；保持 `off`，避免推理消耗 token 导致裁决词没输出）
 
 ## 安装（动态，单次运行）
 
