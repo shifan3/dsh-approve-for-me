@@ -154,6 +154,7 @@ async function judgeWithLlm(req, llm, action) {
     messages: messages,
     system: system,
     maxTokens: MAX_TOKENS,
+    reasoningEffort: "off",
     sessionId: req.agent.session.id,
     purpose: "approval-auto"
   };
@@ -167,11 +168,11 @@ async function judgeWithLlm(req, llm, action) {
     if (chunk.type === "text-delta" && typeof chunk.text === "string") text += chunk.text;
     else if (chunk.type === "finish") finish = chunk.reason || { kind: "stop" };
   }
-  if (finish.kind === "aborted") return req.signal && req.signal.aborted ? "cancelled" : "rejected";
-  if (finish.kind !== "stop") return "rejected";
+  if (finish.kind === "aborted") return req.signal && req.signal.aborted ? "cancelled" : undefined;
+  if (finish.kind !== "stop" && finish.kind !== "max-tokens") return undefined;
   if (/REJECT/i.test(text)) return "rejected";
   if (/ALLOW/i.test(text)) return "allowed-once";
-  return "rejected";
+  return undefined;
 }
 
 return {
@@ -186,7 +187,9 @@ return {
         if (isHighRisk(action) || isHighRisk(req.reason)) return next();
         const llm = ctx.llm;
         if (!llm) return next();
-        return await judgeWithLlm(req, llm, action);
+        const outcome = await judgeWithLlm(req, llm, action);
+        if (outcome === undefined) return next();
+        return outcome;
       } catch (_) {
         return next();
       }
