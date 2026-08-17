@@ -4,6 +4,14 @@
   "description": "Approve-for-me mode for DeepSeek Harness: an LLM safety reviewer auto-approves ordinary approval requests, while destructive high-risk commands still ask the human.",
   "type": "module",
   "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",

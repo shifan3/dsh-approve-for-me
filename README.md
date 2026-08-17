@@ -41,40 +41,84 @@ The following are matched as exact patterns against the extracted action text (c
 
 ## Install (static, survives restart)
 
-The recommended install is a local static row via the DSH home patch layer.
+### Option A: `dsh plugin add` (recommended)
 
-1. Clone this repo into your DSH home:
+The package declares `dsh.bundle.patch`, so `dsh plugin add` installs it and
+adds it to the profile's `dsh.profile.bundles` automatically — no manual
+patch editing.
 
-   ```bash
-   mkdir -p ~/.dsh/plugins
-   git clone https://github.com/<your-account>/dsh-approve-for-me.git ~/.dsh/plugins/approve-for-me
-   ```
+Clone the repo, then from the directory that contains it run:
 
-2. Create or extend `~/.dsh/cordis.patch.yml` with:
+```bash
+git clone https://github.com/shifan3/dsh-approve-for-me.git
+dsh plugin --profile web add ./dsh-approve-for-me
+```
 
-   ```yaml
-   - insert:
-       - id: approve-for-me
-         name: '../../plugins/approve-for-me/lib/index.js'
-         config:
-           enabled: true
-           provider: deepseek-official
-           model: deepseek-v4-flash
-           maxTokens: 512
-           summaryMaxChars: 12000
-           timeoutMs: 60000
-   ```
+Or by absolute path:
 
-   (`cordis.patch.yml` in this repo contains the same snippet for reference.)
+```bash
+dsh plugin --profile web add /path/to/dsh-approve-for-me
+```
 
-3. Restart `dsh web` (or your profile). The home patch layer applies to every profile.
+Or, once it is published to npm:
 
-The relative `name` resolves against each profile directory (`~/.dsh/profiles/<name>/`), so `../../plugins/...` reaches `~/.dsh/plugins/...` for the shipped `web`, `tui`, and `cc-tui` profiles.
+```bash
+dsh plugin --profile web add dsh-approve-for-me
+```
+
+Then restart `dsh web`. The command runs `pnpm add` inside
+`~/.dsh/profiles/web/`, then reconciles `dsh.profile.bundles` against the
+installed package. The row that activates the plugin lives in this repo's
+`cordis.patch.yml`.
+
+### Option B: manual home patch layer
+
+If you prefer not to use `dsh plugin`, clone the repo into your DSH home and
+insert the row into `~/.dsh/cordis.patch.yml` yourself (applies to every
+profile):
+
+```bash
+mkdir -p ~/.dsh/plugins
+git clone https://github.com/shifan3/dsh-approve-for-me.git ~/.dsh/plugins/approve-for-me
+```
+
+Then create or extend `~/.dsh/cordis.patch.yml` with:
+
+```yaml
+- insert:
+    - id: approve-for-me
+      name: '../../plugins/approve-for-me/lib/index.js'
+      config:
+        enabled: true
+        provider: deepseek-official
+        model: deepseek-v4-flash
+        maxTokens: 512
+        summaryMaxChars: 12000
+        timeoutMs: 60000
+```
+
+Then restart `dsh web`. The relative `name` resolves against each profile
+directory (`~/.dsh/profiles/<name>/`), so `../../plugins/...` reaches
+`~/.dsh/plugins/...` for the shipped `web`, `tui`, and `cc-tui` profiles.
+
+> If you previously installed via Option B and then switch to Option A,
+> remove the `approve-for-me` insert from `~/.dsh/cordis.patch.yml` first so
+> the row is not defined twice.
 
 ### Enable / disable / configure
 
-- Disable: set `enabled: false` in the patch and restart.
-- Uninstall: remove the `insert` block (or the whole patch file) and restart.
+- Disable: set `enabled: false` in the row config and restart.
+  - Option A: add an id-targeted override to the profile patch
+    (`~/.dsh/profiles/web/cordis.patch.yml`):
+    ```yaml
+    - id: approve-for-me
+      config:
+        enabled: false
+    ```
+  - Option B: edit the insert block in `~/.dsh/cordis.patch.yml`.
+- Uninstall:
+  - Option A: `dsh plugin --profile web remove dsh-approve-for-me`, then restart.
+  - Option B: remove the `insert` block (or the whole patch file), then restart.
 - Config keys (all optional):
   - `enabled` (default `true`)
   - `provider` (default `deepseek-official`)
@@ -94,7 +138,7 @@ If you prefer not to write to `~/.dsh`, you can load `host-code.js` as a dynamic
 
 - `lib/index.js` — static host plugin (ESM, no runtime dependencies).
 - `host-code.js` — dynamic Cordis Host package variant (same logic, sandbox-safe subset).
-- `cordis.patch.yml` — example home patch layer entry.
+- `cordis.patch.yml` — bundle patch (declared via `dsh.bundle.patch`) that activates the plugin row.
 
 ## Limitations
 
