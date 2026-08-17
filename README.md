@@ -1,5 +1,7 @@
 # dsh-approve-for-me
 
+中文说明见 [README.zh.md](README.zh.md)。
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) host plugin that adds an **approve-for-me** approval mode.
 
 When enabled, every approval request that reaches the DSH answerer chain is judged by an LLM safety reviewer against a summary of the prior conversation. The model answers `ALLOW` or `REJECT`. Destructive high-risk commands — `rm -r`, `rm -rf`, `drop table`, `drop database`, and friends — skip the model entirely and are sent to the normal interactive user prompt.
