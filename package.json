@@ -1,0 +1,16 @@
+{
+  "name": "dsh-approve-for-me",
+  "version": "0.1.0",
+  "description": "Approve-for-me mode for DeepSeek Harness: an LLM safety reviewer auto-approves ordinary approval requests, while destructive high-risk commands still ask the human.",
+  "type": "module",
+  "main": "lib/index.js",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "approval",
+    "auto-approve",
+    "safety"
+  ],
+  "license": "MIT"
+}

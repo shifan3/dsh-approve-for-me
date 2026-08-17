@@ -1,0 +1,15 @@
+# Home-level user patch layer for dsh ($DSH_HOME/cordis.patch.yml).
+# Applied after every profile's own cordis.patch.yml, for every profile.
+# The row below installs the approve-for-me static plugin from
+# $DSH_HOME/plugins/approve-for-me/lib/index.js (the path is relative to
+# each profile directory, which sits two levels below $DSH_HOME).
+- insert:
+    - id: approve-for-me
+      name: '../../plugins/approve-for-me/lib/index.js'
+      config:
+        enabled: true
+        provider: deepseek-official
+        model: deepseek-v4-flash
+        maxTokens: 512
+        summaryMaxChars: 12000
+        timeoutMs: 60000
